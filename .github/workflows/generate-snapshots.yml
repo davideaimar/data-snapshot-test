@@ -27,19 +27,14 @@ jobs:
           node-version: '18'
       
       - name: Setup Deno
-        uses: denoland/setup-deno@v1
+        uses: denoland/setup-deno@v2
         with:
-          deno-version: v1.x
+          deno-version: v2.x
 
       - name: Build SvelteKit frontend
         working-directory: ./frontend
         run: |
-          if [ -f "package.json" ]; then
-            deno install --allow-scripts
-          fi
-          if [ -f "deno.json" ] || [ -f "deno.jsonc" ]; then
-            deno cache --reload **/*.ts **/*.js || true
-          fi
+          deno install --allow-scripts
           deno task build
       
       - name: Prepare deployment files
