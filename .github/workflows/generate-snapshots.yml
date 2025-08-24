@@ -34,7 +34,12 @@ jobs:
       - name: Build SvelteKit frontend
         working-directory: ./frontend
         run: |
-          deno install
+          if [ -f "package.json" ]; then
+            deno install --allow-scripts
+          fi
+          if [ -f "deno.json" ] || [ -f "deno.jsonc" ]; then
+            deno cache --reload **/*.ts **/*.js || true
+          fi
           deno task build
       
       - name: Prepare deployment files
