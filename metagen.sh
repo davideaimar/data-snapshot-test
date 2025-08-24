@@ -46,7 +46,15 @@ git clone --depth 1 "$REPO" "$tmpdir" >/dev/null 2>&1 || {
 }
 
 cd "$tmpdir"
-git checkout -B "$VOLUME"
+
+# Check if the branch already exists on remote
+if git ls-remote --heads origin "$VOLUME" | grep -q "$VOLUME"; then
+  echo "Branch $VOLUME exists, checking out..."
+  git checkout -B "$VOLUME" "origin/$VOLUME"
+else
+  echo "Creating new orphan branch $VOLUME..."
+  git checkout --orphan "$VOLUME"
+fi
 
 # --- WIPE existing branch content except .git ---
 shopt -s dotglob  # include hidden files
