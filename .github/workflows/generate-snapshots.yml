@@ -1,0 +1,218 @@
+name: Generate Volume Snapshots
+
+on:
+  push:
+    branches: ['**']  # Trigger on any branch push
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  generate-snapshots:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Get complete history
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      
+      - name: Generate volume snapshots
+        run: |
+          #!/bin/bash
+          set -euo pipefail
+          
+          # Create output directory
+          mkdir -p snapshots/data
+          mkdir -p snapshots/web
+          
+          echo "🔍 Discovering all branches..."
+          # Get all remote branches (excluding HEAD)
+          branches=$(git branch -r | grep -v '\->' | sed 's/origin\///' | sort -u)
+          
+          volumes_json="{"
+          first_volume=true
+          
+          for branch in $branches; do
+            echo "📂 Processing branch: $branch"
+            
+            # Skip if branch doesn't exist or is HEAD
+            if [[ "$branch" == "HEAD" ]] || ! git show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+              echo "⚠️  Skipping invalid branch: $branch"
+              continue
+            fi
+            
+            # Checkout branch
+            git checkout "$branch" 2>/dev/null || {
+              echo "⚠️  Could not checkout branch: $branch"
+              continue
+            }
+            
+            # Get all commits for this branch (reverse chronological order)
+            commits=$(git log --format="%H|%ai|%s" --reverse)
+            
+            if [ -z "$commits" ]; then
+              echo "⚠️  No commits found in branch: $branch"
+              continue
+            fi
+            
+            # Add comma separator for JSON
+            if [ "$first_volume" = false ]; then
+              volumes_json="$volumes_json,"
+            fi
+            first_volume=false
+            
+            # Start volume JSON
+            volumes_json="$volumes_json\"$branch\":{\"commits\":["
+            
+            first_commit=true
+            commit_count=0
+            
+            while IFS='|' read -r commit_hash commit_date commit_message; do
+              # Skip empty lines
+              [ -z "$commit_hash" ] && continue
+              
+              echo "  📝 Processing commit: $commit_hash ($(echo "$commit_message" | head -c 50)...)"
+              
+              # Checkout specific commit
+              git checkout "$commit_hash" 2>/dev/null || {
+                echo "    ⚠️  Could not checkout commit: $commit_hash"
+                continue
+              }
+              
+              # Add comma separator for JSON
+              if [ "$first_commit" = false ]; then
+                volumes_json="$volumes_json,"
+              fi
+              first_commit=false
+              
+              # Parse all .meta files in this commit
+              files_json=""
+              first_file=true
+              total_size=0
+              file_count=0
+              
+              # Find all .meta files
+              while IFS= read -r -d '' metafile; do
+                if [ -f "$metafile" ]; then
+                  # Extract path without .meta extension
+                  original_path="${metafile%.meta}"
+                  
+                  # Read and validate JSON
+                  if jq empty "$metafile" 2>/dev/null; then
+                    # Add comma separator
+                    if [ "$first_file" = false ]; then
+                      files_json="$files_json,"
+                    fi
+                    first_file=false
+                    
+                    # Extract metadata using jq
+                    path=$(jq -r '.path' "$metafile" 2>/dev/null || echo "unknown")
+                    size=$(jq -r '.size' "$metafile" 2>/dev/null || echo "0")
+                    sha256=$(jq -r '.sha256' "$metafile" 2>/dev/null || echo "unknown")
+                    
+                    # Escape path for JSON
+                    path_escaped=$(echo "$path" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g')
+                    
+                    # Add to files JSON
+                    files_json="$files_json\"$path_escaped\":{\"size\":$size,\"sha256\":\"$sha256\"}"
+                    
+                    # Update stats
+                    total_size=$((total_size + size))
+                    file_count=$((file_count + 1))
+                  else
+                    echo "    ⚠️  Invalid JSON in: $metafile"
+                  fi
+                fi
+              done < <(find . -name "*.meta" -type f -print0)
+              
+              # Create commit JSON
+              commit_date_escaped=$(echo "$commit_date" | sed 's/"/\\"/g')
+              commit_message_escaped=$(echo "$commit_message" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g')
+              
+              volumes_json="$volumes_json{\"hash\":\"$commit_hash\",\"date\":\"$commit_date_escaped\",\"message\":\"$commit_message_escaped\",\"stats\":{\"file_count\":$file_count,\"total_size\":$total_size},\"files\":{$files_json}}"
+              
+              commit_count=$((commit_count + 1))
+              echo "    ✅ Processed $file_count files ($(numfmt --to=iec $total_size))"
+              
+            done <<< "$commits"
+            
+            # Close commits array for this volume
+            volumes_json="$volumes_json]}"
+            
+            echo "✅ Branch '$branch' complete: $commit_count commits processed"
+          done
+          
+          # Close volumes JSON
+          volumes_json="$volumes_json}"
+          
+          # Create final JSON structure
+          final_json="{\"generated_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"volumes\":$volumes_json}"
+          
+          echo "💾 Writing final JSON..."
+          echo "$final_json" | jq '.' > snapshots/data/volumes.json
+          
+          # Create summary stats
+          echo "📊 Generating summary..."
+          echo "$final_json" | jq '{
+            generated_at: .generated_at,
+            summary: {
+              total_volumes: (.volumes | length),
+              volume_stats: (.volumes | to_entries | map({
+                name: .key,
+                commits: (.value.commits | length),
+                latest_date: (.value.commits | map(.date) | max),
+                total_files: (.value.commits | map(.stats.file_count) | max),
+                total_size: (.value.commits | map(.stats.total_size) | max)
+              }))
+            }
+          }' > snapshots/data/summary.json
+          
+          echo "✅ JSON generation complete!"
+          
+          # Print summary
+          echo "
+          📋 SUMMARY:
+          $(cat snapshots/data/summary.json | jq -r '.summary.volume_stats[] | "  📂 \(.name): \(.commits) commits, \(.total_files) files, \(.total_size | . / 1024 / 1024 | floor)MB"')
+          "
+          
+          # Create a simple index.html placeholder
+          cat > snapshots/web/index.html << 'EOF'
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <title>Volume Snapshots</title>
+            <meta charset="utf-8">
+          </head>
+          <body>
+            <h1>Volume Snapshots</h1>
+            <p>Data files:</p>
+            <ul>
+              <li><a href="../data/volumes.json">volumes.json</a> - Complete volume data</li>
+              <li><a href="../data/summary.json">summary.json</a> - Summary statistics</li>
+            </ul>
+            <p><em>Web interface coming soon...</em></p>
+          </body>
+          </html>
+          EOF
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+        
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: './snapshots'
+          
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
