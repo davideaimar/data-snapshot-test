@@ -36,8 +36,8 @@ jobs:
           mkdir -p snapshots/web
           
           echo "🔍 Discovering all branches..."
-          # Get all remote branches (excluding HEAD)
-          branches=$(git branch -r | grep -v '\->' | sed 's/origin\///' | sort -u)
+          # Get all remote branches (excluding HEAD and main)
+          branches=$(git branch -r | grep -v '\->' | sed 's/origin\///' | grep -v -E '^(main|master|develop)$' | sort -u)
           
           volumes_json="{"
           first_volume=true
