@@ -33,6 +33,7 @@ jobs:
           
           # Create output directory
           mkdir -p snapshots/data
+          mkdir -p snapshots/data/commits
           mkdir -p snapshots/web
           
           echo "🔍 Discovering all branches..."
@@ -71,7 +72,7 @@ jobs:
             fi
             first_volume=false
             
-            # Start volume JSON
+            # Start volume JSON (no files)
             volumes_json="$volumes_json\"$branch\":{\"commits\":["
             
             first_commit=true
@@ -139,7 +140,10 @@ jobs:
               commit_date_escaped=$(echo "$commit_date" | sed 's/"/\\"/g')
               commit_message_escaped=$(echo "$commit_message" | sed 's/\\/\\\\/g' | sed 's/"/\\"/g')
               
-              volumes_json="$volumes_json{\"hash\":\"$commit_hash\",\"date\":\"$commit_date_escaped\",\"message\":\"$commit_message_escaped\",\"stats\":{\"file_count\":$file_count,\"total_size\":$total_size},\"files\":{$files_json}}"
+              volumes_json="$volumes_json{\"hash\":\"$commit_hash\",\"date\":\"$commit_date_escaped\",\"message\":\"$commit_message_escaped\",\"stats\":{\"file_count\":$file_count,\"total_size\":$total_size}}"
+              
+              commit_detail="{\"hash\":\"$commit_hash\",\"date\":\"$commit_date_escaped\",\"message\":\"$commit_message_escaped\",\"volume\":\"$branch\",\"stats\":{\"file_count\":$file_count,\"total_size\":$total_size},\"files\":{$files_json}}"
+              echo "$commit_detail" | jq '.' > "snapshots/data/commits/$commit_hash.json"
               
               commit_count=$((commit_count + 1))
               echo "    ✅ Processed $file_count files ($(numfmt --to=iec $total_size))"
@@ -155,18 +159,19 @@ jobs:
           # Close volumes JSON
           volumes_json="$volumes_json}"
           
-          # Create final JSON structure
-          final_json="{\"generated_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"volumes\":$volumes_json}"
+          # Create volumes list JSON
+          volumes_list_json="{\"generated_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"volumes\":$volumes_json}"
           
-          echo "💾 Writing final JSON..."
-          echo "$final_json" | jq '.' > snapshots/data/volumes.json
+          echo "💾 Writing API JSON files..."
+          echo "$volumes_list_json" | jq '.' > snapshots/data/volumes.json
           
           # Create summary stats
           echo "📊 Generating summary..."
-          echo "$final_json" | jq '{
+          echo "$volumes_list_json" | jq '{
             generated_at: .generated_at,
             summary: {
               total_volumes: (.volumes | length),
+              total_commits: (.volumes | to_entries | map(.value.commits | length) | add),
               volume_stats: (.volumes | to_entries | map({
                 name: .key,
                 commits: (.value.commits | length),
@@ -177,29 +182,45 @@ jobs:
             }
           }' > snapshots/data/summary.json
           
-          echo "✅ JSON generation complete!"
+          echo "✅ API generation complete!"
           
           # Print summary
-          echo "
-          📋 SUMMARY:
-          $(cat snapshots/data/summary.json | jq -r '.summary.volume_stats[] | "  📂 \(.name): \(.commits) commits, \(.total_files) files, \(.total_size | . / 1024 / 1024 | floor)MB"')
-          "
+          echo ""
+          echo "📋 SUMMARY:"
+          cat snapshots/data/summary.json | jq -r '.summary.volume_stats[] | "  📂 \(.name): \(.commits) commits, \(.total_files) files, \(.total_size / 1024 / 1024 | floor)MB"'
+          echo ""
+          echo "📁 Generated APIs:"
+          echo "    • summary.json - Overview stats"
+          echo "    • volumes.json - Volumes + commits (no files)"
+          echo "    • commits/{hash}.json - Individual commit details"
           
           # Create a simple index.html placeholder
           cat > snapshots/web/index.html << 'EOF'
           <!DOCTYPE html>
           <html>
           <head>
-            <title>Volume Snapshots</title>
+            <title>Volume Snapshots APIs</title>
             <meta charset="utf-8">
           </head>
           <body>
-            <h1>Volume Snapshots</h1>
-            <p>Data files:</p>
+            <h1>Volume Snapshots APIs</h1>
+            <h2>API Endpoints:</h2>
             <ul>
-              <li><a href="../data/volumes.json">volumes.json</a> - Complete volume data</li>
-              <li><a href="../data/summary.json">summary.json</a> - Summary statistics</li>
+              <li><a href="../data/summary.json">summary.json</a> - Overview and stats</li>
+              <li><a href="../data/volumes.json">volumes.json</a> - Volumes and commits (lightweight)</li>
+              <li><strong>commits/{hash}.json</strong> - Individual commit details with files</li>
             </ul>
+            <h2>Usage:</h2>
+            <pre>
+            # Get overview
+            GET /data/summary.json
+            
+            # List volumes and commits  
+            GET /data/volumes.json
+            
+            # Get specific commit details
+            GET /data/commits/{commit-hash}.json
+            </pre>
             <p><em>Web interface coming soon...</em></p>
           </body>
           </html>
