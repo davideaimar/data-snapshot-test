@@ -26,10 +26,28 @@ jobs:
         with:
           node-version: '18'
       
+      - name: Setup Deno
+        uses: denoland/setup-deno@v1
+        with:
+          deno-version: v1.x
+      
       - name: Generate volume snapshots
         run: |
           chmod +x .github/scripts/generate-snapshots.sh
           ./.github/scripts/generate-snapshots.sh
+
+      - name: Build SvelteKit frontend
+        working-directory: ./frontend
+        run: |
+          deno install
+          deno task build
+      
+      - name: Prepare deployment files
+        run: |
+          # Copy the built frontend to the root for GitHub Pages
+          cp -r frontend/build/* ./
+          # Ensure snapshots and other generated files are preserved
+          # (assuming they're already in the root from the generate-snapshots step)
 
       - name: Setup Pages
         uses: actions/configure-pages@v4

@@ -1,1 +1,8 @@
 data
+node_modules
+.snapshots
+DS_Store
+.vscode
+.env
+.env.local
+.svelte-kit

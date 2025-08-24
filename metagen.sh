@@ -15,6 +15,16 @@ else
   exit 2
 fi
 
+# Check if ssh-agent is running and key is loaded
+if ! ssh-add -l >/dev/null 2>&1; then
+    echo "Starting ssh-agent and adding SSH key..."
+    eval "$(ssh-agent -s)"
+    ssh-add
+    trap 'ssh-agent -k' EXIT
+else
+    echo "SSH key already loaded in agent."
+fi
+
 stat_size() {
   if stat --version >/dev/null 2>&1; then
     stat -c %s -- "$1"
@@ -49,8 +59,10 @@ cd "$tmpdir"
 
 # Check if the branch already exists on remote
 if git ls-remote --heads origin "$VOLUME" | grep -q "$VOLUME"; then
-  echo "Branch $VOLUME exists, checking out..."
-  git checkout -B "$VOLUME" "origin/$VOLUME"
+  echo "Branch $VOLUME exists, going there..."
+  git fetch origin "$VOLUME:$VOLUME"
+  git checkout "$VOLUME"
+  echo "Branch $VOLUME selected."
 else
   echo "Creating new orphan branch $VOLUME..."
   git checkout --orphan "$VOLUME"
